@@ -1,8 +1,8 @@
 {
   "name": "shocol",
   "displayName": "shoCol",
-  "description": "Display color preview boxes before hex color codes",
-  "version": "1.0.1",
+  "description": "Display color preview boxes before hex, RGB, and RGBA color codes",
+  "version": "1.0.2",
   "publisher": "morph3ux",
   "icon": "icon.png",
   "repository": {

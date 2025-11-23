@@ -1,52 +1,97 @@
 import * as vscode from 'vscode';
 
-// Hex color regex patterns
-const HEX_COLOR_REGEX = /#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})\b/g;
+// Color regex patterns
+const HEX_COLOR_REGEX = /#([0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})\b/g;
+const RGB_COLOR_REGEX = /rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/gi;
+const RGBA_COLOR_REGEX = /rgba\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)/gi;
 
 // Store decoration types per color
 const decorationTypeCache = new Map<string, vscode.TextEditorDecorationType>();
 
-// Convert hex to RGB
-function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+interface ColorMatch {
+  color: string;
+  startIndex: number;
+  length: number;
+}
+
+// Convert hex to RGBA
+function hexToRgba(hex: string): { r: number; g: number; b: number; a: number } | null {
   // Remove # if present
   hex = hex.replace('#', '');
   
-  // Expand shorthand (e.g., #abc -> #aabbcc)
-  if (hex.length === 3) {
+  // Expand shorthand (e.g., #abc -> #aabbcc, #abcd -> #aabbccdd)
+  if (hex.length === 3 || hex.length === 4) {
     hex = hex.split('').map(char => char + char).join('');
   }
   
-  if (hex.length !== 6) {
+  if (hex.length === 6) {
+    // No alpha channel, default to opaque
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    return { r, g, b, a: 1 };
+  } else if (hex.length === 8) {
+    // With alpha channel
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    const a = parseInt(hex.substring(6, 8), 16) / 255;
+    return { r, g, b, a };
+  }
+  
+  return null;
+}
+
+// Convert RGB/RGBA string to RGBA object
+function parseRgbRgba(match: RegExpMatchArray, hasAlpha: boolean): { r: number; g: number; b: number; a: number } | null {
+  const r = parseInt(match[1], 10);
+  const g = parseInt(match[2], 10);
+  const b = parseInt(match[3], 10);
+  const a = hasAlpha ? parseFloat(match[4]) : 1;
+  
+  if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255 || a < 0 || a > 1) {
     return null;
   }
   
-  const r = parseInt(hex.substring(0, 2), 16);
-  const g = parseInt(hex.substring(2, 4), 16);
-  const b = parseInt(hex.substring(4, 6), 16);
-  
-  return { r, g, b };
+  return { r, g, b, a };
+}
+
+// Convert RGBA to CSS color string
+function rgbaToCss(rgba: { r: number; g: number; b: number; a: number }): string {
+  if (rgba.a === 1) {
+    return `rgb(${rgba.r}, ${rgba.g}, ${rgba.b})`;
+  }
+  return `rgba(${rgba.r}, ${rgba.g}, ${rgba.b}, ${rgba.a})`;
 }
 
 // Get or create decoration type for a specific color
-function getDecorationTypeForColor(hexColor: string): vscode.TextEditorDecorationType {
-  if (decorationTypeCache.has(hexColor)) {
-    return decorationTypeCache.get(hexColor)!;
+function getDecorationTypeForColor(colorString: string): vscode.TextEditorDecorationType {
+  if (decorationTypeCache.has(colorString)) {
+    return decorationTypeCache.get(colorString)!;
   }
   
-  const rgb = hexToRgb(hexColor);
-  if (!rgb) {
-    throw new Error(`Invalid hex color: ${hexColor}`);
-  }
+  let cssColor: string;
   
-  // Normalize hex color (ensure it has # and is uppercase)
-  const normalizedHex = hexColor.startsWith('#') ? hexColor.toUpperCase() : `#${hexColor.toUpperCase()}`;
+  // Check if it's a hex color
+  if (colorString.startsWith('#')) {
+    const rgba = hexToRgba(colorString);
+    if (!rgba) {
+      throw new Error(`Invalid hex color: ${colorString}`);
+    }
+    cssColor = rgbaToCss(rgba);
+  } else if (colorString.toLowerCase().startsWith('rgb')) {
+    // Already a valid RGB/RGBA string
+    cssColor = colorString;
+  } else {
+    throw new Error(`Invalid color format: ${colorString}`);
+  }
   
   // Create a decoration type with a colored box
   // Using a space character with background color and white border
   const decorationType = vscode.window.createTextEditorDecorationType({
     before: {
       contentText: ' ',
-      backgroundColor: normalizedHex,
+      backgroundColor: cssColor,
       border: '1px solid white',
       width: '14px',
       height: '14px',
@@ -54,44 +99,93 @@ function getDecorationTypeForColor(hexColor: string): vscode.TextEditorDecoratio
     }
   });
   
-  decorationTypeCache.set(hexColor, decorationType);
+  decorationTypeCache.set(colorString, decorationType);
   return decorationType;
+}
+
+// Find all color matches in text
+function findAllColors(text: string): ColorMatch[] {
+  const matches: ColorMatch[] = [];
+  
+  // Find hex colors
+  let match;
+  HEX_COLOR_REGEX.lastIndex = 0;
+  while ((match = HEX_COLOR_REGEX.exec(text)) !== null) {
+    const hexColor = match[0];
+    const rgba = hexToRgba(hexColor);
+    if (rgba) {
+      matches.push({
+        color: hexColor,
+        startIndex: match.index,
+        length: hexColor.length
+      });
+    }
+  }
+  
+  // Find RGB colors
+  RGB_COLOR_REGEX.lastIndex = 0;
+  while ((match = RGB_COLOR_REGEX.exec(text)) !== null) {
+    const rgba = parseRgbRgba(match, false);
+    if (rgba) {
+      matches.push({
+        color: match[0],
+        startIndex: match.index,
+        length: match[0].length
+      });
+    }
+  }
+  
+  // Find RGBA colors
+  RGBA_COLOR_REGEX.lastIndex = 0;
+  while ((match = RGBA_COLOR_REGEX.exec(text)) !== null) {
+    const rgba = parseRgbRgba(match, true);
+    if (rgba) {
+      matches.push({
+        color: match[0],
+        startIndex: match.index,
+        length: match[0].length
+      });
+    }
+  }
+  
+  // Sort by position to avoid conflicts
+  matches.sort((a, b) => a.startIndex - b.startIndex);
+  
+  return matches;
 }
 
 // Update decorations for a text editor
 function updateDecorations(editor: vscode.TextEditor) {
   const text = editor.document.getText();
   
+  // Find all color matches
+  const colorMatches = findAllColors(text);
+  
   // Group decorations by color
   const decorationsByColor = new Map<string, vscode.DecorationOptions[]>();
   
-  let match;
-  while ((match = HEX_COLOR_REGEX.exec(text)) !== null) {
-    const hexColor = match[0];
-    const startPos = editor.document.positionAt(match.index);
-    const endPos = editor.document.positionAt(match.index + hexColor.length);
-    
-    const rgb = hexToRgb(hexColor);
-    if (rgb) {
-      if (!decorationsByColor.has(hexColor)) {
-        decorationsByColor.set(hexColor, []);
-      }
-      
-      const decoration: vscode.DecorationOptions = {
-        range: new vscode.Range(startPos, endPos)
-      };
-      
-      decorationsByColor.get(hexColor)!.push(decoration);
+  colorMatches.forEach(match => {
+    if (!decorationsByColor.has(match.color)) {
+      decorationsByColor.set(match.color, []);
     }
-  }
+    
+    const startPos = editor.document.positionAt(match.startIndex);
+    const endPos = editor.document.positionAt(match.startIndex + match.length);
+    
+    const decoration: vscode.DecorationOptions = {
+      range: new vscode.Range(startPos, endPos)
+    };
+    
+    decorationsByColor.get(match.color)!.push(decoration);
+  });
   
   // Apply decorations for each color
-  decorationsByColor.forEach((decorations, hexColor) => {
+  decorationsByColor.forEach((decorations, colorString) => {
     try {
-      const decorationType = getDecorationTypeForColor(hexColor);
+      const decorationType = getDecorationTypeForColor(colorString);
       editor.setDecorations(decorationType, decorations);
     } catch (error) {
-      console.error(`Error creating decoration for color ${hexColor}:`, error);
+      console.error(`Error creating decoration for color ${colorString}:`, error);
     }
   });
   
