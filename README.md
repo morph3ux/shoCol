@@ -2,6 +2,8 @@
 
 A VSCode extension that displays color preview boxes before hex color codes in your editor.
 
+![Screenshot](screenshot.png)
+
 ## Features
 
 - Automatically detects hex color codes (e.g., `#9567bd`, `#ff800f`, `#abc`)
